@@ -1,5 +1,5 @@
 from flask import Flask, jsonify, request
-import requests  # 💡 [關鍵改變] 換回 Python 官方最標準的網路套件
+import requests
 import os
 import json
 import re
@@ -22,30 +22,32 @@ def api_get_shipid():
 
     target_url = f"https://www.marinetraffic.com/en/global_search/search?term={mmsi}"
     
-    # 💡 [終極修正] 把參數交給 requests 自動進行最標準的編碼，ScraperAPI 絕對不會漏接！
+    # 💡 [終極火力全開] 住宅 IP + 隱形瀏覽器 + 指定美國節點
     payload = {
         'api_key': scraper_api_key,
         'url': target_url,
-        'premium': 'true',       # 強制開啟住宅 IP
-        'keep_headers': 'true'   # 保留我們給的 Referer
+        'premium': 'true',       # 啟用真實住宅 IP
+        'render': 'true',        # 💡 強制開啟瀏覽器渲染，破解 Cloudflare JS 驗證
+        'country_code': 'us',    # 💡 指定美國 IP (降低被鎖定機率)
+        'keep_headers': 'true'
     }
     
-    # 偽裝成從首頁點擊進去的正常行為
     headers = {
         "Referer": "https://www.marinetraffic.com/"
     }
 
     try:
-        print(f"[請求發出] 透過標準 API 呼叫 ScraperAPI (MMSI: {mmsi})，請等待...")
+        print(f"[請求發出] 啟動 Premium + Render 破解 Cloudflare (MMSI: {mmsi})，請等待 30-80 秒...")
         
-        # 發送標準請求，不搞任何特殊偽裝
-        response = requests.get('http://api.scraperapi.com/', params=payload, headers=headers, timeout=60)
+        # 💡 因為開啟瀏覽器執行 JS 需要比較久的時間，把 timeout 延長到 85 秒
+        response = requests.get('http://api.scraperapi.com/', params=payload, headers=headers, timeout=85)
         
         if response.status_code == 200:
             raw_text = response.text
             data = None
             
-            # 嘗試解析 JSON
+            # 因為使用了隱形瀏覽器，回傳的 JSON 可能會被包在 <html><body> 標籤裡
+            # 這裡我們做智慧解析，把外面包著的 HTML 剝掉
             try:
                 data = response.json()
             except:
