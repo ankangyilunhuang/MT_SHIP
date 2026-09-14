@@ -4,7 +4,9 @@ import threading
 import time
 import random
 import os
-import urllib.parse  # 💡 [新增] 用來安全地編碼網址
+import urllib.parse
+import json  # 💡 [新增] 處理 JSON 解析
+import re    # 💡 [新增] 用來剝除 HTML 標籤
 
 app = Flask(__name__)
 thread_local = threading.local()
@@ -14,10 +16,7 @@ IMPERSONATE_LIST = ["chrome110", "chrome116", "chrome120", "safari15_5", "safari
 def get_session():
     if not hasattr(thread_local, "session"):
         browser_type = random.choice(IMPERSONATE_LIST)
-        
-        # 💡 [修改] 因為改用 REST API，這裡不需要再設定 proxies 了，變得更乾淨！
         session = requests.Session(impersonate=browser_type, verify=False)
-        
         session.headers.update({
             "Accept": "application/json, text/plain, */*",
             "x-requested-with": "XMLHttpRequest",
@@ -41,39 +40,47 @@ def api_get_shipid():
     if not mmsi:
         return jsonify({"status": "error", "message": "Missing mmsi parameter"}), 400
     
-    # 從環境變數取得你的 API KEY
     scraper_api_key = os.environ.get("SCRAPERAPI_KEY")
     if not scraper_api_key:
         return jsonify({"status": "error", "message": "尚未設定 SCRAPERAPI_KEY 環境變數"}), 500
 
-    # 1. 這是我們真正要抓的 MarineTraffic 網址
     target_url = f"https://www.marinetraffic.com/en/global_search/search?term={mmsi}"
-    # 將目標網址進行編碼，確保特殊字元不會跑掉
     encoded_url = urllib.parse.quote(target_url)
     
-    # 2. 💡 [關鍵修正] 組裝 ScraperAPI 的 REST API 網址
-    # 這裡明確地寫上 premium=true 以及 keep_headers=true，保證 ScraperAPI 絕對收得到！
-    api_url = f"http://api.scraperapi.com/?api_key={scraper_api_key}&url={encoded_url}&premium=true&keep_headers=true"
+    # 💡 [終極武器] 加入 &render=true！命令 ScraperAPI 啟動真實隱形瀏覽器破解 Cloudflare
+    api_url = f"http://api.scraperapi.com/?api_key={scraper_api_key}&url={encoded_url}&premium=true&render=true"
     
     session = get_session()
     
     try:
-        referers = [
-            "https://www.marinetraffic.com/",
-            "https://www.marinetraffic.com/en/data/?menu=vessels"
-        ]
-        session.headers["Referer"] = random.choice(referers)
+        print(f"[請求發出] 啟動隱形瀏覽器破解 Cloudflare... MMSI: {mmsi}，可能需要 30~60 秒...")
         
-        print(f"[請求發出] 透過 REST API 查詢 MMSI: {mmsi}，請耐心等待 60 秒...")
-        # 呼叫我們組好的 api_url
-        response = session.get(api_url, timeout=60, verify=False)
+        # 因為隱形瀏覽器需要時間執行 JS 腳本，這裡將 timeout 延長到 85 秒
+        response = session.get(api_url, timeout=85, verify=False)
         
         if response.status_code == 200:
-            data = response.json()
-            results = data.get("results", [])
-            if results and len(results) > 0:
-                ship_id = results[0].get("id")
-                return jsonify({"status": "success", "shipid": str(ship_id)})
+            raw_text = response.text
+            data = None
+            
+            # 💡 [資料清洗] 瀏覽器有時會把 JSON 包在 HTML 裡面，這裡做智慧解析
+            try:
+                # 先嘗試直接解析
+                data = response.json()
+            except:
+                # 若失敗，剝除所有 HTML 標籤後再解析一次
+                clean_text = re.sub(r'<[^>]+>', '', raw_text).strip()
+                try:
+                    data = json.loads(clean_text)
+                except Exception as parse_err:
+                    print(f"[解析失敗] 內容已被污染: {clean_text[:100]}")
+                    
+            # 判斷並擷取 ShipID
+            if data and isinstance(data, dict):
+                results = data.get("results", [])
+                if results and len(results) > 0:
+                    ship_id = results[0].get("id")
+                    return jsonify({"status": "success", "shipid": str(ship_id)})
+            
             return jsonify({"status": "not_found", "shipid": None})
         
         else:
