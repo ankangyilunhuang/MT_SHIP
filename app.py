@@ -65,23 +65,20 @@ def api_get_shipid():
         return jsonify({"status": "error", "message": "Missing mmsi parameter"}), 400
     
     url = f"https://www.marinetraffic.com/en/global_search/search?term={mmsi}"
-    max_retries = 2  # 如果逾時或被擋，最多內部自動重試 2 次 (共執行 3 次)
+    max_retries = 2  # 最多內部自動重試 2 次 (共執行 3 次)
     
     for attempt in range(max_retries + 1):
         session = get_session()
         
         try:
-            # 動態修改 Referer，模擬用戶在網站內不同的頁面發出搜尋
             referers = [
                 "https://www.marinetraffic.com/",
                 "https://www.marinetraffic.com/en/data/?menu=vessels"
             ]
             session.headers["Referer"] = random.choice(referers)
 
-            # 隨機延遲模擬真人
             time.sleep(random.uniform(0.8, 1.8))
             
-            # 💡 [關鍵修正] timeout 延長至 35 秒，給 ScraperAPI 充足的切換時間
             response = session.get(url, timeout=35, verify=False)
             
             if response.status_code == 200:
@@ -92,22 +89,24 @@ def api_get_shipid():
                     return jsonify({"status": "success", "shipid": str(ship_id)})
                 return jsonify({"status": "not_found", "shipid": None})
             
-            elif response.status_code in [403, 401, 429]:
-                # 遇到阻擋，丟棄這個被污染的 IP/Session
-                reset_session()
-                print(f"[Retry {attempt+1}] HTTP {response.status_code} 被阻擋，準備重試...")
-                
-                # 如果已經是最後一次嘗試，才回傳錯誤
-                if attempt == max_retries:
-                    return jsonify({"status": "error", "message": f"MT Blocked request (Status {response.status_code})."}), response.status_code
-                
             else:
-                return jsonify({"status": "error", "message": f"MT status {response.status_code}"}), response.status_code
+                # 💡 [關鍵修改] 把 500, 502, 503 等所有非 200 的錯誤都視為「代理失敗/被阻擋」
+                # 並且擷取前 150 個字的錯誤訊息內文，讓我們知道到底是誰在擋
+                error_preview = response.text[:150].replace('\n', ' ')
+                print(f"[Retry {attempt+1}] 失敗！HTTP {response.status_code}，訊息: {error_preview}")
+                
+                reset_session() # 銷毀這個爛 IP
+                
+                # 如果已經是最後一次嘗試，才把真實錯誤訊息回傳給 GAS
+                if attempt == max_retries:
+                    return jsonify({
+                        "status": "error", 
+                        "message": f"MT status {response.status_code}. Detail: {error_preview}"
+                    }), response.status_code
                 
         except Exception as e:
-            # 💡 [關鍵修正] 遇到 curl: (28) Timeout 時，直接銷毀 Session，換一個 IP 再試
-            reset_session()
             print(f"[Retry {attempt+1}] 連線逾時或錯誤 ({e})，準備重試...")
+            reset_session()
             
             if attempt == max_retries:
                 return jsonify({"status": "error", "message": str(e)}), 500
