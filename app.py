@@ -9,7 +9,7 @@ app = Flask(__name__)
 thread_local = threading.local()
 
 # 可用的瀏覽器偽裝特徵池 (隨機切換避免單一特徵被鎖定)
-IMPERSONATE_LIST = ["chrome116", "chrome120", "edge116", "safari17_0"]
+IMPERSONATE_LIST = ["chrome110", "chrome116", "chrome120", "safari15_5", "safari17_0"]
 
 def get_session():
     """建立包含完整瀏覽器特徵與初始 Cookie 的 Session"""
