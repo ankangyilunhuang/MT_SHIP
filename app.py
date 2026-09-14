@@ -79,7 +79,7 @@ def api_get_shipid():
 
             time.sleep(random.uniform(0.8, 1.8))
             
-            response = session.get(url, timeout=35, verify=False)
+            response = session.get(url, timeout=20, verify=False)
             
             if response.status_code == 200:
                 data = response.json()
