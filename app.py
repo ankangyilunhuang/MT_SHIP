@@ -17,17 +17,15 @@ def get_session():
         # 1. 隨機選擇一個瀏覽器指紋
         browser_type = random.choice(IMPERSONATE_LIST)
         
-        # 💡 [進階防護] 若未來仍被擋，可在 Render 環境變數設定 PROXY_URL 
-        # 例如：http://user:pass@proxy_ip:port
         proxies = {}
         proxy_url = os.environ.get("PROXY_URL")
         if proxy_url:
             proxies = {"http": proxy_url, "https": proxy_url}
             
-        session = requests.Session(impersonate=browser_type, proxies=proxies)
+        # 💡 [關鍵修正] 加入 verify=False，忽略代理伺服器帶來的 SSL 憑證驗證問題
+        session = requests.Session(impersonate=browser_type, proxies=proxies, verify=False)
         
-        # 2. ⚠️ 關鍵修正：讓 curl_cffi 自動處理 User-Agent 與 sec-ch-ua
-        # 我們只補充需要的「業務邏輯 Headers」，絕對不要手動寫死 User-Agent
+        # 2. 讓 curl_cffi 自動處理 User-Agent 與 sec-ch-ua
         session.headers.update({
             "Accept": "application/json, text/plain, */*",
             "x-requested-with": "XMLHttpRequest",
@@ -36,11 +34,11 @@ def get_session():
             "sec-fetch-site": "same-origin",
         })
         
-        # 3. 預先訪問資料頁面獲取基本 Cookie (Cloudflare 初步檢查)
+        # 3. 預先訪問資料頁面獲取基本 Cookie
         try:
-            # 模擬人類訪問首頁的思考時間
             time.sleep(random.uniform(0.5, 1.5))
-            session.get("https://www.marinetraffic.com/en/data/?menu=vessels", timeout=15)
+            # 這裡也建議加上 verify=False
+            session.get("https://www.marinetraffic.com/en/data/?menu=vessels", timeout=15, verify=False)
         except Exception as e:
             print(f"Init cookie error: {e}")
             
