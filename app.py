@@ -1,34 +1,10 @@
 from flask import Flask, jsonify, request
-from curl_cffi import requests
-import threading
-import time
-import random
+import requests  # 💡 [關鍵改變] 換回 Python 官方最標準的網路套件
 import os
-import urllib.parse
-import json  # 💡 [新增] 處理 JSON 解析
-import re    # 💡 [新增] 用來剝除 HTML 標籤
+import json
+import re
 
 app = Flask(__name__)
-thread_local = threading.local()
-
-IMPERSONATE_LIST = ["chrome110", "chrome116", "chrome120", "safari15_5", "safari17_0"]
-
-def get_session():
-    if not hasattr(thread_local, "session"):
-        browser_type = random.choice(IMPERSONATE_LIST)
-        session = requests.Session(impersonate=browser_type, verify=False)
-        session.headers.update({
-            "Accept": "application/json, text/plain, */*",
-            "x-requested-with": "XMLHttpRequest",
-        })
-        thread_local.session = session
-        print(f"[Session 建立] 偽裝指紋: {browser_type}")
-        
-    return thread_local.session
-
-def reset_session():
-    if hasattr(thread_local, "session"):
-        del thread_local.session
 
 @app.route('/', methods=['GET'])
 def health_check():
@@ -45,36 +21,40 @@ def api_get_shipid():
         return jsonify({"status": "error", "message": "尚未設定 SCRAPERAPI_KEY 環境變數"}), 500
 
     target_url = f"https://www.marinetraffic.com/en/global_search/search?term={mmsi}"
-    encoded_url = urllib.parse.quote(target_url)
     
-    # 💡 [終極武器] 加入 &render=true！命令 ScraperAPI 啟動真實隱形瀏覽器破解 Cloudflare
-    api_url = f"http://api.scraperapi.com/?api_key={scraper_api_key}&url={encoded_url}&premium=true&render=true"
+    # 💡 [終極修正] 把參數交給 requests 自動進行最標準的編碼，ScraperAPI 絕對不會漏接！
+    payload = {
+        'api_key': scraper_api_key,
+        'url': target_url,
+        'premium': 'true',       # 強制開啟住宅 IP
+        'keep_headers': 'true'   # 保留我們給的 Referer
+    }
     
-    session = get_session()
-    
+    # 偽裝成從首頁點擊進去的正常行為
+    headers = {
+        "Referer": "https://www.marinetraffic.com/"
+    }
+
     try:
-        print(f"[請求發出] 啟動隱形瀏覽器破解 Cloudflare... MMSI: {mmsi}，可能需要 30~60 秒...")
+        print(f"[請求發出] 透過標準 API 呼叫 ScraperAPI (MMSI: {mmsi})，請等待...")
         
-        # 因為隱形瀏覽器需要時間執行 JS 腳本，這裡將 timeout 延長到 85 秒
-        response = session.get(api_url, timeout=85, verify=False)
+        # 發送標準請求，不搞任何特殊偽裝
+        response = requests.get('http://api.scraperapi.com/', params=payload, headers=headers, timeout=60)
         
         if response.status_code == 200:
             raw_text = response.text
             data = None
             
-            # 💡 [資料清洗] 瀏覽器有時會把 JSON 包在 HTML 裡面，這裡做智慧解析
+            # 嘗試解析 JSON
             try:
-                # 先嘗試直接解析
                 data = response.json()
             except:
-                # 若失敗，剝除所有 HTML 標籤後再解析一次
                 clean_text = re.sub(r'<[^>]+>', '', raw_text).strip()
                 try:
                     data = json.loads(clean_text)
-                except Exception as parse_err:
-                    print(f"[解析失敗] 內容已被污染: {clean_text[:100]}")
+                except:
+                    pass
                     
-            # 判斷並擷取 ShipID
             if data and isinstance(data, dict):
                 results = data.get("results", [])
                 if results and len(results) > 0:
@@ -86,7 +66,6 @@ def api_get_shipid():
         else:
             error_preview = response.text[:150].replace('\n', ' ')
             print(f"[失敗] HTTP {response.status_code}，訊息: {error_preview}")
-            reset_session()
             return jsonify({
                 "status": "error", 
                 "message": f"MT status {response.status_code}. Detail: {error_preview}"
@@ -94,7 +73,6 @@ def api_get_shipid():
             
     except Exception as e:
         print(f"[錯誤] 連線逾時或發生例外 ({e})")
-        reset_session()
         return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
