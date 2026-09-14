@@ -65,51 +65,43 @@ def api_get_shipid():
         return jsonify({"status": "error", "message": "Missing mmsi parameter"}), 400
     
     url = f"https://www.marinetraffic.com/en/global_search/search?term={mmsi}"
-    max_retries = 2  # 最多內部自動重試 2 次 (共執行 3 次)
+    session = get_session()
     
-    for attempt in range(max_retries + 1):
-        session = get_session()
+    try:
+        # 動態修改 Referer 模擬正常點擊
+        referers = [
+            "https://www.marinetraffic.com/",
+            "https://www.marinetraffic.com/en/data/?menu=vessels"
+        ]
+        session.headers["Referer"] = random.choice(referers)
         
-        try:
-            referers = [
-                "https://www.marinetraffic.com/",
-                "https://www.marinetraffic.com/en/data/?menu=vessels"
-            ]
-            session.headers["Referer"] = random.choice(referers)
-
-            time.sleep(random.uniform(0.8, 1.8))
-            
-            response = session.get(url, timeout=20, verify=False)
-            
-            if response.status_code == 200:
-                data = response.json()
-                results = data.get("results", [])
-                if results and len(results) > 0:
-                    ship_id = results[0].get("id")
-                    return jsonify({"status": "success", "shipid": str(ship_id)})
-                return jsonify({"status": "not_found", "shipid": None})
-            
-            else:
-                # 💡 [關鍵修改] 把 500, 502, 503 等所有非 200 的錯誤都視為「代理失敗/被阻擋」
-                # 並且擷取前 150 個字的錯誤訊息內文，讓我們知道到底是誰在擋
-                error_preview = response.text[:150].replace('\n', ' ')
-                print(f"[Retry {attempt+1}] 失敗！HTTP {response.status_code}，訊息: {error_preview}")
-                
-                reset_session() # 銷毀這個爛 IP
-                
-                # 如果已經是最後一次嘗試，才把真實錯誤訊息回傳給 GAS
-                if attempt == max_retries:
-                    return jsonify({
-                        "status": "error", 
-                        "message": f"MT status {response.status_code}. Detail: {error_preview}"
-                    }), response.status_code
-                
-        except Exception as e:
-            print(f"[Retry {attempt+1}] 連線逾時或錯誤 ({e})，準備重試...")
+        # 💡 [關鍵修正] 放寬到 60 秒！讓 ScraperAPI 有足夠的時間去切換住宅 IP
+        # 並且移除了我們自己的 for 迴圈重試，因為 ScraperAPI 遇到阻擋內部會自動重試
+        print(f"[請求發出] 正在透過 Premium IP 查詢 MMSI: {mmsi}，請耐心等待...")
+        response = session.get(url, timeout=60, verify=False)
+        
+        if response.status_code == 200:
+            data = response.json()
+            results = data.get("results", [])
+            if results and len(results) > 0:
+                ship_id = results[0].get("id")
+                return jsonify({"status": "success", "shipid": str(ship_id)})
+            return jsonify({"status": "not_found", "shipid": None})
+        
+        else:
+            # 萬一連 ScraperAPI Premium 都失敗 (極少見)，擷取錯誤訊息
+            error_preview = response.text[:150].replace('\n', ' ')
+            print(f"[失敗] HTTP {response.status_code}，訊息: {error_preview}")
             reset_session()
+            return jsonify({
+                "status": "error", 
+                "message": f"MT status {response.status_code}. Detail: {error_preview}"
+            }), response.status_code
             
-            if attempt == max_retries:
-                return jsonify({"status": "error", "message": str(e)}), 500
+    except Exception as e:
+        print(f"[錯誤] 連線逾時或發生例外 ({e})")
+        reset_session()
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
