@@ -1,8 +1,8 @@
 from flask import Flask, jsonify, request
 import requests
 import os
-import json
 import re
+import urllib.parse
 
 app = Flask(__name__)
 
@@ -20,57 +20,40 @@ def api_get_shipid():
     if not scraper_api_key:
         return jsonify({"status": "error", "message": "尚未設定 SCRAPERAPI_KEY 環境變數"}), 500
 
-    target_url = f"https://www.marinetraffic.com/en/global_search/search?term={mmsi}"
+    # 💡 [思維轉換] 我們不去 MarineTraffic 了，我們改去 Google 搜尋！
+    # 搜尋語法：site:marinetraffic.com mmsi 123456789
+    query = f"site:marinetraffic.com mmsi {mmsi}"
+    target_url = f"https://www.google.com/search?q={urllib.parse.quote(query)}"
     
-    # 💡 [終極火力全開] 住宅 IP + 隱形瀏覽器 + 指定美國節點
+    # 只需要最普通的 ScraperAPI 請求，不需要 premium，也不用 render
     payload = {
         'api_key': scraper_api_key,
-        'url': target_url,
-        'premium': 'true',       # 啟用真實住宅 IP
-        'render': 'true',        # 💡 強制開啟瀏覽器渲染，破解 Cloudflare JS 驗證
-        'country_code': 'us',    # 💡 指定美國 IP (降低被鎖定機率)
-        'keep_headers': 'true'
-    }
-    
-    headers = {
-        "Referer": "https://www.marinetraffic.com/"
+        'url': target_url
     }
 
     try:
-        print(f"[請求發出] 啟動 Premium + Render 破解 Cloudflare (MMSI: {mmsi})，請等待 30-80 秒...")
+        print(f"[請求發出] 放棄正面突破，改由 Google 搜尋 MMSI: {mmsi} 的 ShipID...")
         
-        # 💡 因為開啟瀏覽器執行 JS 需要比較久的時間，把 timeout 延長到 85 秒
-        response = requests.get('http://api.scraperapi.com/', params=payload, headers=headers, timeout=85)
+        # 抓取 Google 搜尋結果，通常只要 3~5 秒
+        response = requests.get('http://api.scraperapi.com/', params=payload, timeout=30)
         
         if response.status_code == 200:
-            raw_text = response.text
-            data = None
+            # 💡 [魔法就在這裡] 直接用正則表達式，掃描 HTML 中有沒有出現 shipid:數字
+            match = re.search(r'shipid:(\d+)', response.text)
             
-            # 因為使用了隱形瀏覽器，回傳的 JSON 可能會被包在 <html><body> 標籤裡
-            # 這裡我們做智慧解析，把外面包著的 HTML 剝掉
-            try:
-                data = response.json()
-            except:
-                clean_text = re.sub(r'<[^>]+>', '', raw_text).strip()
-                try:
-                    data = json.loads(clean_text)
-                except:
-                    pass
-                    
-            if data and isinstance(data, dict):
-                results = data.get("results", [])
-                if results and len(results) > 0:
-                    ship_id = results[0].get("id")
-                    return jsonify({"status": "success", "shipid": str(ship_id)})
-            
-            return jsonify({"status": "not_found", "shipid": None})
+            if match:
+                ship_id = match.group(1)
+                print(f"[成功] 透過 Google 成功攔截 ShipID: {ship_id}")
+                return jsonify({"status": "success", "shipid": ship_id})
+            else:
+                print("[未找到] Google 索引中尚未收錄該 MMSI 的 ShipID")
+                return jsonify({"status": "not_found", "shipid": None})
         
         else:
-            error_preview = response.text[:150].replace('\n', ' ')
-            print(f"[失敗] HTTP {response.status_code}，訊息: {error_preview}")
+            print(f"[失敗] Google 搜尋失敗，HTTP {response.status_code}")
             return jsonify({
                 "status": "error", 
-                "message": f"MT status {response.status_code}. Detail: {error_preview}"
+                "message": f"Search failed with status {response.status_code}"
             }), response.status_code
             
     except Exception as e:
